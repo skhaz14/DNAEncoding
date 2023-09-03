@@ -1,0 +1,290 @@
+import reedsolo
+import random
+
+
+class YinYangEncoder():
+    def __init__(self) -> None:
+        self.block_size = 120
+        self.max_error_correction1 = 10
+        self.max_error_correction2 = 30
+        self.encoding_dictionary1 = self.generate_encoding_dictionary("1")
+        self.encoding_dictionary2 = self.generate_encoding_dictionary("2")
+        self.error_correction_amino_encode_dict = self.generate_encoding_dictionary("3")
+        self.error_correction_amino_decode_dict = {v: k for k, v in self.error_correction_amino_encode_dict.items()}
+        self.first_amino = "A"
+    
+    def generate_encoding_dictionary(self, version):
+        dictionary = {}
+        if version == "1":
+            dictionary["0"] = ["A", "T"]
+            dictionary["1"] = ["C", "G"]
+        elif version == "2":
+            dictionary["A"] = [["A", "G"], ["C", "T"]]
+            dictionary["T"] = [["C", "T"], ["A", "G"]]
+            dictionary["G"] = [["A", "G"], ["C", "T"]]
+            dictionary["C"] = [["C", "T"], ["A", "G"]]
+        elif version == "3":
+            dictionary["000"] = "AT"
+            dictionary["001"] = "AC"
+            dictionary["010"] = "AG"
+            dictionary["011"] = "CT"
+            dictionary["100"] = "CG"
+            dictionary["101"] = "TG"
+            dictionary["110"] = "TC"
+            dictionary["111"] = "GC"
+        return dictionary
+    
+    def convert_to_binary(self, data_list):
+        binary = ""
+        for data in data_list:
+            if type(data) == int:
+                binary += format(data, "08b")
+            elif type(data) == str:
+                binary += format(ord(data), "08b")
+        return binary
+        
+    def yin_yang_encode(self, sequence1, sequence2):
+        if len(sequence1) != len(sequence2):
+            raise Exception("Sequences must be of equal length")
+        encoded_sequence = self.first_amino
+        for i in range(len(sequence1)):
+            prev_amino = encoded_sequence[-1]
+            seq1_possible_amino = self.encoding_dictionary1[sequence1[i]].copy()
+            seq2_possible_amino = self.encoding_dictionary2[prev_amino][int(sequence2[i])].copy()
+            temp_list = []
+            temp_list.extend(seq1_possible_amino)
+            temp_list.extend(seq2_possible_amino)
+            chosen_amino = max(set(temp_list), key=temp_list.count)
+            encoded_sequence += chosen_amino
+        return encoded_sequence
+
+    def error_correction_encode(self, string, version=1):
+        rs = None
+        if version == 1:
+            rs = reedsolo.RSCodec(self.max_error_correction1)
+        elif version == 2:
+            rs = reedsolo.RSCodec(self.max_error_correction2)
+        error_corrected_sequence = rs.encode(string)
+        return error_corrected_sequence
+    
+    def error_correction_amino_encode(self, error_correction_data):
+        temp_list = []
+        for data in error_correction_data:
+            binary_string = self.convert_to_binary(data)
+            encoded_sequence = ""
+            for i in range(0, len(binary_string)-2, 3):
+                temp = binary_string[i:i+3]
+                encoded_sequence += self.error_correction_amino_encode_dict[temp]
+            temp_list.append(encoded_sequence)
+        return temp_list
+
+
+    def apply_constraints(self, encoded_blocks):
+        for i in range(len(encoded_blocks)):
+            encoded_blocks[i] = list(encoded_blocks[i])
+            j = 0
+            while j < len(encoded_blocks[i]) - 2:
+                if encoded_blocks[i][j] ==  encoded_blocks[i][j+1] == encoded_blocks[i][j+2] and encoded_blocks[i][j] == ord("A"):
+                    encoded_blocks[i][j+1] = random.choice([ord("C"), ord("G"), ord("T")])
+                elif encoded_blocks[i][j] ==  encoded_blocks[i][j+1] == encoded_blocks[i][j+2] and encoded_blocks[i][j] == ord("C"):
+                    encoded_blocks[i][j+1] = random.choice([ord("A"), ord("G"), ord("T")])
+                elif encoded_blocks[i][j] ==  encoded_blocks[i][j+1] == encoded_blocks[i][j+2] and encoded_blocks[i][j] == ord("G"):
+                    encoded_blocks[i][j+1] = random.choice([ord("A"), ord("C"), ord("T")])
+                elif encoded_blocks[i][j] ==  encoded_blocks[i][j+1] == encoded_blocks[i][j+2] and encoded_blocks[i][j] == ord("T"):
+                    encoded_blocks[i][j+1] = random.choice([ord("A"), ord("C"), ord("G")])
+                j += 1
+            temp_sequence = bytearray(encoded_blocks[i])
+            error_corrected_sequence = self.error_correction_encode(temp_sequence, version=1)
+            encoded_blocks[i] = error_corrected_sequence
+        return encoded_blocks
+
+    def seperate_pure_data_and_error_correction_data(self, encoded_blocks):
+        pure_data = []
+        error_correction_data = []
+        for i in range(len(encoded_blocks)):
+            temp_block = list(encoded_blocks[i])
+            isErrorCorrection = False
+            j = 0
+            while not isErrorCorrection and j < len(temp_block):
+                if temp_block[j] in [ord("A"), ord("C"), ord("G"), ord("T")]:
+                    j += 1
+                else:
+                    isErrorCorrection = True
+            temp_pure_data = temp_block[:j]
+            temp_error_correction_data = temp_block[j:]
+            temp_pure_data = "".join([chr(x) for x in temp_pure_data])
+            pure_data.append(temp_pure_data)
+            error_correction_data.append(temp_error_correction_data)
+        return pure_data, error_correction_data
+
+    def encode_address_data(self, pure_data, error_correction_data):
+        for i in range(len(pure_data)):
+            address_binary = format(i, "09b")
+            address = ""
+            for j in range(0, len(address_binary)-2, 3):
+                temp = address_binary[j:j+3]
+                address += self.error_correction_amino_encode_dict[temp]
+            pure_data[i] = address + pure_data[i]
+            error_correction_data[i] = address + error_correction_data[i]
+        return pure_data, error_correction_data
+
+    def encode(self, string):
+        binary = self.convert_to_binary(string)
+        sequence1 = binary[0:len(binary)//2]
+        sequence2 = binary[len(binary)//2:]
+
+        encoded_sequence = self.yin_yang_encode(sequence1, sequence2)
+        
+        encoded_blocks = []
+        for i in range(0, len(encoded_sequence), self.block_size):
+            temp_sequence = encoded_sequence[i:i+self.block_size]
+            temp_sequence = bytearray(temp_sequence, "utf-8")
+            error_corrected_sequence = self.error_correction_encode(temp_sequence, version=2)
+            encoded_blocks.append(error_corrected_sequence)
+        
+        encoded_blocks = self.apply_constraints(encoded_blocks)   
+        pure_data, error_correction_data = self.seperate_pure_data_and_error_correction_data(encoded_blocks)
+        error_correction_data = self.error_correction_amino_encode(error_correction_data)
+
+        pure_data, error_correction_data = self.encode_address_data(pure_data, error_correction_data)
+
+        return pure_data, error_correction_data
+
+    def convert_binary(self, binary, type):
+        data = None
+        if type == "string":
+            data = ""
+        elif type == "int":
+            data = []
+        for i in range(0, len(binary), 8):
+            if type == "string":
+                data += chr(int(binary[i:i+8], 2))
+            elif type == "int":
+                data.append(int(binary[i:i+8], 2))
+        return data
+
+    def yin_yang_decode(self, sequence):
+        decoded_sequence1 = ""
+        decoded_sequence2 = ""
+        for i in range(len(sequence)-1, 0, -1):
+            prev_amino = sequence[i-1]
+            if sequence[i] in self.encoding_dictionary1["0"]:
+                decoded_sequence1 += "0"
+            elif sequence[i] in self.encoding_dictionary1["1"]:
+                decoded_sequence1 += "1"
+            if sequence[i] in self.encoding_dictionary2[prev_amino][0]:
+                decoded_sequence2 += "0"
+            elif sequence[i] in self.encoding_dictionary2[prev_amino][1]:
+                decoded_sequence2 += "1"
+        decoded_sequence1 = decoded_sequence1[::-1]
+        decoded_sequence2 = decoded_sequence2[::-1]
+        return decoded_sequence1 + decoded_sequence2
+
+    def error_correction_decode(self, string, version=1):
+        rs = None
+        if version == 1:
+            rs = reedsolo.RSCodec(self.max_error_correction1)
+        elif version == 2:
+            rs = reedsolo.RSCodec(self.max_error_correction2)
+        error_corrected_sequence = rs.decode(string)
+        return error_corrected_sequence
+    
+    def decode_address_data(self, pure_data, error_correction_data):
+        decoded_pure_data = [None] * len(pure_data)
+        decoded_error_correction_data = [None] * len(error_correction_data)
+        for i in range(len(pure_data)):
+            address = pure_data[i][0:6]
+            address_binary = ""
+            for j in range(0, len(address)-1, 2):
+                temp = address[j:j+2]
+                address_binary += self.error_correction_amino_decode_dict[temp]
+            address = int(address_binary, 2)
+            decoded_pure_data[address] = pure_data[i][6:]
+
+            address = error_correction_data[i][0:6]
+            address_binary = ""
+            for j in range(0, len(address)-1, 2):
+                temp = address[j:j+2]
+                address_binary += self.error_correction_amino_decode_dict[temp]
+            address = int(address_binary, 2)
+            decoded_error_correction_data[address] = error_correction_data[i][6:]
+        return decoded_pure_data, decoded_error_correction_data
+
+
+    def error_correction_amino_decode(self, error_correction_data):
+        temp_list = []
+        for data in error_correction_data:
+            decoded_sequence = ""
+            for i in range(0, len(data)-1, 2):
+                temp = data[i:i+2]
+                decoded_sequence += self.error_correction_amino_decode_dict[temp]
+            
+            decoded_sequence = self.convert_binary(decoded_sequence, "int")
+            temp_list.append(decoded_sequence)
+        return temp_list
+
+    def merge_pure_data_and_error_correction_data(self, pure_data, error_correction_data):
+        encoded_blocks = []
+        for i in range(len(pure_data)):
+            temp_list = [ord(pure_data[i][j]) for j in range(len(pure_data[i]))]
+            temp_list.extend(error_correction_data[i])
+            temp_list = bytearray(temp_list)
+            encoded_blocks.append(temp_list)
+        return encoded_blocks
+
+    def decode(self, pure_data, error_correction_data):
+        pure_data, error_correction_data = self.decode_address_data(pure_data, error_correction_data)
+        error_correction_data = self.error_correction_amino_decode(error_correction_data)
+        encoded_blocks = self.merge_pure_data_and_error_correction_data(pure_data, error_correction_data)
+        decoded_blocks = []
+        for block in encoded_blocks:
+            error_corrected_sequence = self.error_correction_decode(block, version=1)
+            error_corrected_sequence = self.error_correction_decode(error_corrected_sequence[0], version=2)
+            data_sequence = error_corrected_sequence[0].decode("utf-8")
+            decoded_blocks.append(data_sequence)
+        decoded_sequence = "".join(decoded_blocks)
+        decoded_binary = self.yin_yang_decode(decoded_sequence)
+        decoded_string = self.convert_binary(decoded_binary, "string")
+        return decoded_string
+
+    def simulate_errors(self, error_prob, pure_data):
+        error_simulated_blocks = []
+        for block in pure_data:
+            error_simulated_block = list(block)
+            for i in range(6, len(error_simulated_block)):
+                if random.random() < error_prob:
+                    error_simulated_block[i] = random.choice(["A", "C", "G", "T"])
+            error_simulated_block = "".join(error_simulated_block)
+            error_simulated_blocks.append(error_simulated_block)
+        random.shuffle(error_simulated_blocks)
+        return error_simulated_blocks
+
+if __name__ == "__main__":
+    string = "The quick brown fox jumps over the lazy dog. And the lazy dog jumps over the quick brown fox. And they all lived happily ever after. And the story continues to find the quick brown fox and the lazy dog playing together, so the dog was not lazy anymore."
+    print("Original String:\n", string, sep="")
+    yin_yang_encoder = YinYangEncoder()
+    pure_data, error_correction_data = yin_yang_encoder.encode(string)
+    print("\nEncoding DONE!")
+    print("Pure Data")
+    for i, block in enumerate(pure_data):
+        print("Block " + str(i) + ":", block, len(block))
+        
+    print("\nError Correction Data")
+    for i, block in enumerate(error_correction_data):
+        print("Block " + str(i) + ":", block, len(block))
+
+        
+    error_prob = 0.01
+    error_simulated_blocks = yin_yang_encoder.simulate_errors(error_prob, pure_data)
+    print("\nError Simulation DONE!")
+    for i, block in enumerate(error_simulated_blocks):
+        print("Block " + str(i) + ":", block, len(block))
+
+    
+    decoded_string = yin_yang_encoder.decode(error_simulated_blocks, error_correction_data)
+    print("\nDecoding & Error Correction DONE!")
+    print("Decoded String with Error Correction:\n", decoded_string, sep="")
+
+    if string.__eq__(decoded_string):
+        print("\nDecoded String is valid!")
+  
